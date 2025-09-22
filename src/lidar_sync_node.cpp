@@ -37,8 +37,11 @@ public:
           lidarCallback(msg, topic);
         });
 
+      // topic should be /lidar1/synced/points
+      const auto output_topic = topic + "/synced";
+
       auto pub = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        topic + "_synced", 10);
+        output_topic, 10);
 
       subs_[topic] = sub;
       pubs_[topic] = pub;
@@ -52,9 +55,19 @@ public:
 private:
   void clockCallback(const rosgraph_msgs::msg::Clock::SharedPtr msg)
   {
-    current_time_ = msg->clock;
-    RCLCPP_INFO(this->get_logger(), "current_time: %lf",
-                current_time_.seconds());
+    const rclcpp::Time new_time = msg->clock;
+    rclcpp::Time threshold_time = new_time + rclcpp::Duration::from_seconds(offset_);
+
+    // If the clock time (plus offset) has not advanced, do not publish
+    if (has_last_threshold_time_ && threshold_time <= last_threshold_time_) {
+      return;
+    }
+
+    current_time_ = new_time;
+    last_threshold_time_ = threshold_time;
+    has_last_threshold_time_ = true;
+
+    RCLCPP_INFO(this->get_logger(), "current_time: %lf", current_time_.seconds());
 
     // For each lidar buffer, publish ONLY the latest message with timestamp <= current_time + offset
     // and discard all earlier messages (including the published one to avoid duplicates).
@@ -63,13 +76,12 @@ private:
       auto &pub = pubs_[kv.first];
 
       sensor_msgs::msg::PointCloud2::SharedPtr last_eligible_msg = nullptr;
-      rclcpp::Time threshold_time = current_time_ + rclcpp::Duration::from_seconds(offset_);
 
       while (!buffer.empty()) {
         auto &front = buffer.front();
         rclcpp::Time msg_time(front->header.stamp);
 
-        if (msg_time.seconds() <= threshold_time.seconds()) {
+        if (msg_time <= threshold_time) {
           last_eligible_msg = front;
           buffer.pop_front();
         } else {
