@@ -1,0 +1,11 @@
+lidar_sync_node:
+  ros__parameters:
+    # Time offset in seconds to delay/synchronize messages relative to /clock
+    offset: 0.0
+
+    # List of input PointCloud2 topics to synchronize
+    lidar_topics:
+      - "/front/points"
+      - "/rear/points"
+
+
