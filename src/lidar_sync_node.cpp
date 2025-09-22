@@ -23,9 +23,12 @@ public:
       this->declare_parameter<std::vector<std::string>>("lidar_topics",
         {"/lidar1/points", "/lidar2/points"});
 
+    auto qos = rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_default))
+              .best_effort();
+
     // Clock subscriber
     clock_sub_ = this->create_subscription<rosgraph_msgs::msg::Clock>(
-      "/clock", 10, std::bind(&LidarSyncNode::clockCallback, this, _1));
+      "/clock", qos, std::bind(&LidarSyncNode::clockCallback, this, _1));
 
     // Create subs and pubs for each lidar topic
     for (const auto &topic : lidar_topics) {
@@ -50,22 +53,33 @@ private:
   void clockCallback(const rosgraph_msgs::msg::Clock::SharedPtr msg)
   {
     current_time_ = msg->clock;
+    RCLCPP_INFO(this->get_logger(), "current_time: %lf",
+                current_time_.seconds());
 
-    // For each lidar buffer, release messages whose timestamp <= current_time + offset
+    // For each lidar buffer, publish ONLY the latest message with timestamp <= current_time + offset
+    // and discard all earlier messages (including the published one to avoid duplicates).
     for (auto &kv : buffers_) {
       auto &buffer = kv.second;
       auto &pub = pubs_[kv.first];
 
+      sensor_msgs::msg::PointCloud2::SharedPtr last_eligible_msg = nullptr;
+      rclcpp::Time threshold_time = current_time_ + rclcpp::Duration::from_seconds(offset_);
+
       while (!buffer.empty()) {
         auto &front = buffer.front();
         rclcpp::Time msg_time(front->header.stamp);
-        rclcpp::Time threshold_time = current_time_ + rclcpp::Duration::from_seconds(offset_);
-        if (msg_time.nanoseconds() <= threshold_time.nanoseconds()) {
-          pub->publish(*front);
+
+        if (msg_time.seconds() <= threshold_time.seconds()) {
+          last_eligible_msg = front;
           buffer.pop_front();
         } else {
           break;
         }
+      }
+
+      if (last_eligible_msg) {
+        RCLCPP_INFO(this->get_logger(), "publishing latest past message");
+        pub->publish(*last_eligible_msg);
       }
     }
   }
